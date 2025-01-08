@@ -1,5 +1,4 @@
 click
-ctypes
 imageio
 lmdb
 numpy
