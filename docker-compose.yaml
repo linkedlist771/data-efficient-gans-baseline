@@ -1,0 +1,24 @@
+version: '3'
+services:
+  cog-video:
+    image: cog-image:v2 #nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+    container_name: stylegan-container
+    network_mode: "host"
+    volumes:
+      - ./:/workspace
+      - /dev/shm:/dev/shm  # 添加这行来增加共享内存
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true
+    working_dir: /workspace
+    command: tail -f /dev/null
+    shm_size: '8gb'  # 添加这行来设置共享内存大小
+
+volumes:
+  huggingface_cache:
