@@ -20,6 +20,7 @@ from torch_utils import misc
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import grid_sample_gradfix
+from tqdm import tqdm
 
 import legacy
 from metrics import metric_main
@@ -253,8 +254,14 @@ def training_loop(
     batch_idx = 0
     if progress_fn is not None:
         progress_fn(0, total_kimg)
-    while True:
 
+    # Calculate total iterations
+    total_iterations = (total_kimg * 1000) // batch_size
+    
+    # Create tqdm progress bar (only for rank 0)
+    pbar = tqdm(range(total_iterations), disable=(rank != 0))
+    
+    for _ in pbar:
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
             phase_real_img, phase_real_c = next(training_set_iterator)
@@ -314,102 +321,109 @@ def training_loop(
             adjust = np.sign(ada_stats['Loss/signs/real'] - ada_target) * (batch_size * ada_interval) / (ada_kimg * 1000)
             augment_pipe.p.copy_((augment_pipe.p + adjust).max(misc.constant(0, device=device)))
 
-        # Perform maintenance tasks once per tick.
-        done = (cur_nimg >= total_kimg * 1000)
-        if (not done) and (cur_tick != 0) and (cur_nimg < tick_start_nimg + kimg_per_tick * 1000):
-            continue
-
-        # Print status line, accumulating the same information in stats_collector.
-        tick_end_time = time.time()
-        fields = []
-        fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
-        fields += [f"kimg {training_stats.report0('Progress/kimg', cur_nimg / 1e3):<8.1f}"]
-        fields += [f"time {dnnlib.util.format_time(training_stats.report0('Timing/total_sec', tick_end_time - start_time)):<12s}"]
-        fields += [f"sec/tick {training_stats.report0('Timing/sec_per_tick', tick_end_time - tick_start_time):<7.1f}"]
-        fields += [f"sec/kimg {training_stats.report0('Timing/sec_per_kimg', (tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg) * 1e3):<7.2f}"]
-        fields += [f"maintenance {training_stats.report0('Timing/maintenance_sec', maintenance_time):<6.1f}"]
-        fields += [f"cpumem {training_stats.report0('Resources/cpu_mem_gb', psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"]
-        fields += [f"gpumem {training_stats.report0('Resources/peak_gpu_mem_gb', torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}"]
-        torch.cuda.reset_peak_memory_stats()
-        fields += [f"augment {training_stats.report0('Progress/augment', float(augment_pipe.p.cpu()) if augment_pipe is not None else 0):.3f}"]
-        training_stats.report0('Timing/total_hours', (tick_end_time - start_time) / (60 * 60))
-        training_stats.report0('Timing/total_days', (tick_end_time - start_time) / (24 * 60 * 60))
+        # Update progress bar description
         if rank == 0:
-            print(' '.join(fields))
+            pbar.set_description(f"kimg: {cur_nimg//1000:>6}, "
+                               f"p: {float(augment_pipe.p.cpu()):.3f}" if augment_pipe is not None 
+                               else f"kimg: {cur_nimg//1000:>6}")
 
-        # Check for abort.
-        if (not done) and (abort_fn is not None) and abort_fn():
-            done = True
+        # Check for tick tasks
+        done = (cur_nimg >= total_kimg * 1000)
+        cur_tick = cur_nimg // (kimg_per_tick * 1000)
+        
+        # Perform tick tasks if needed
+        if done or cur_nimg >= tick_start_nimg + kimg_per_tick * 1000:
+            # Print status line, accumulating the same information in stats_collector.
+            tick_end_time = time.time()
+            fields = []
+            fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
+            fields += [f"kimg {training_stats.report0('Progress/kimg', cur_nimg / 1e3):<8.1f}"]
+            fields += [f"time {dnnlib.util.format_time(training_stats.report0('Timing/total_sec', tick_end_time - start_time)):<12s}"]
+            fields += [f"sec/tick {training_stats.report0('Timing/sec_per_tick', tick_end_time - tick_start_time):<7.1f}"]
+            fields += [f"sec/kimg {training_stats.report0('Timing/sec_per_kimg', (tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg) * 1e3):<7.2f}"]
+            fields += [f"maintenance {training_stats.report0('Timing/maintenance_sec', maintenance_time):<6.1f}"]
+            fields += [f"cpumem {training_stats.report0('Resources/cpu_mem_gb', psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"]
+            fields += [f"gpumem {training_stats.report0('Resources/peak_gpu_mem_gb', torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}"]
+            torch.cuda.reset_peak_memory_stats()
+            fields += [f"augment {training_stats.report0('Progress/augment', float(augment_pipe.p.cpu()) if augment_pipe is not None else 0):.3f}"]
+            training_stats.report0('Timing/total_hours', (tick_end_time - start_time) / (60 * 60))
+            training_stats.report0('Timing/total_days', (tick_end_time - start_time) / (24 * 60 * 60))
             if rank == 0:
-                print()
-                print('Aborting...')
+                print(' '.join(fields))
 
-        # Save image snapshot.
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
-            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
-
-        # Save network snapshot.
-        snapshot_pkl = None
-        snapshot_data = None
-        if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
-            snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
-            for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
-                if module is not None:
-                    if num_gpus > 1:
-                        misc.check_ddp_consistency(module, ignore_regex=r'.*\.w_avg')
-                    module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
-                snapshot_data[name] = module
-                del module # conserve memory
-            snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
-            if rank == 0:
-                with open(snapshot_pkl, 'wb') as f:
-                    pickle.dump(snapshot_data, f)
-
-        # Evaluate metrics.
-        if (snapshot_data is not None) and (len(metrics) > 0):
-            if rank == 0:
-                print('Evaluating metrics...')
-            for metric in metrics:
-                result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'],
-                    dataset_kwargs=training_set_kwargs, num_gpus=num_gpus, rank=rank, device=device)
+            # Check for abort.
+            if (not done) and (abort_fn is not None) and abort_fn():
+                done = True
                 if rank == 0:
-                    metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
-                stats_metrics.update(result_dict.results)
-        del snapshot_data # conserve memory
+                    print()
+                    print('Aborting...')
 
-        # Collect statistics.
-        for phase in phases:
-            value = []
-            if (phase.start_event is not None) and (phase.end_event is not None):
-                phase.end_event.synchronize()
-                value = phase.start_event.elapsed_time(phase.end_event)
-            training_stats.report0('Timing/' + phase.name, value)
-        stats_collector.update()
-        stats_dict = stats_collector.as_dict()
+            # Save image snapshot.
+            if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
+                images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+                save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
 
-        # Update logs.
-        timestamp = time.time()
-        if stats_jsonl is not None:
-            fields = dict(stats_dict, timestamp=timestamp)
-            stats_jsonl.write(json.dumps(fields) + '\n')
-            stats_jsonl.flush()
-        if stats_tfevents is not None:
-            global_step = int(cur_nimg / 1e3)
-            walltime = timestamp - start_time
-            for name, value in stats_dict.items():
-                stats_tfevents.add_scalar(name, value.mean, global_step=global_step, walltime=walltime)
-            for name, value in stats_metrics.items():
-                stats_tfevents.add_scalar(f'Metrics/{name}', value, global_step=global_step, walltime=walltime)
-            stats_tfevents.flush()
-        if progress_fn is not None:
-            progress_fn(cur_nimg // 1000, total_kimg)
+            # Save network snapshot.
+            snapshot_pkl = None
+            snapshot_data = None
+            if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
+                snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
+                for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
+                    if module is not None:
+                        if num_gpus > 1:
+                            misc.check_ddp_consistency(module, ignore_regex=r'.*\.w_avg')
+                        module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
+                    snapshot_data[name] = module
+                    del module # conserve memory
+                snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
+                if rank == 0:
+                    with open(snapshot_pkl, 'wb') as f:
+                        pickle.dump(snapshot_data, f)
 
-        # Update state.
-        cur_tick += 1
-        tick_start_nimg = cur_nimg
-        tick_start_time = time.time()
-        maintenance_time = tick_start_time - tick_end_time
+            # Evaluate metrics.
+            if (snapshot_data is not None) and (len(metrics) > 0):
+                if rank == 0:
+                    print('Evaluating metrics...')
+                for metric in metrics:
+                    result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'],
+                        dataset_kwargs=training_set_kwargs, num_gpus=num_gpus, rank=rank, device=device)
+                    if rank == 0:
+                        metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
+                    stats_metrics.update(result_dict.results)
+                del snapshot_data # conserve memory
+
+            # Collect statistics.
+            for phase in phases:
+                value = []
+                if (phase.start_event is not None) and (phase.end_event is not None):
+                    phase.end_event.synchronize()
+                    value = phase.start_event.elapsed_time(phase.end_event)
+                training_stats.report0('Timing/' + phase.name, value)
+            stats_collector.update()
+            stats_dict = stats_collector.as_dict()
+
+            # Update logs.
+            timestamp = time.time()
+            if stats_jsonl is not None:
+                fields = dict(stats_dict, timestamp=timestamp)
+                stats_jsonl.write(json.dumps(fields) + '\n')
+                stats_jsonl.flush()
+            if stats_tfevents is not None:
+                global_step = int(cur_nimg / 1e3)
+                walltime = timestamp - start_time
+                for name, value in stats_dict.items():
+                    stats_tfevents.add_scalar(name, value.mean, global_step=global_step, walltime=walltime)
+                for name, value in stats_metrics.items():
+                    stats_tfevents.add_scalar(f'Metrics/{name}', value, global_step=global_step, walltime=walltime)
+                stats_tfevents.flush()
+            if progress_fn is not None:
+                progress_fn(cur_nimg // 1000, total_kimg)
+
+            # Update state.
+            tick_start_nimg = cur_nimg
+            tick_start_time = time.time()
+            maintenance_time = tick_start_time - tick_end_time
+
         if done:
             break
 
