@@ -5,3 +5,5 @@ __pycache__/
 *.pkl
 .idea/
 checkpoints
+data/deposition_data/
+data/deposition_data_processed/
