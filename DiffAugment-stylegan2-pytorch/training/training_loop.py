@@ -384,12 +384,12 @@ def training_loop(
             if (snapshot_data is not None) and (len(metrics) > 0):
                 if rank == 0:
                     print('Evaluating metrics...')
-                for metric in metrics:
-                    result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'],
-                        dataset_kwargs=training_set_kwargs, num_gpus=num_gpus, rank=rank, device=device)
-                    if rank == 0:
-                        metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
-                    stats_metrics.update(result_dict.results)
+                # for metric in metrics:
+                #     result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'],
+                #         dataset_kwargs=training_set_kwargs, num_gpus=num_gpus, rank=rank, device=device)
+                #     if rank == 0:
+                #         metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
+                #     stats_metrics.update(result_dict.results)
                 del snapshot_data # conserve memory
 
             # Collect statistics.
@@ -408,14 +408,14 @@ def training_loop(
                 fields = dict(stats_dict, timestamp=timestamp)
                 stats_jsonl.write(json.dumps(fields) + '\n')
                 stats_jsonl.flush()
-            if stats_tfevents is not None:
-                global_step = int(cur_nimg / 1e3)
-                walltime = timestamp - start_time
-                for name, value in stats_dict.items():
-                    stats_tfevents.add_scalar(name, value.mean, global_step=global_step, walltime=walltime)
-                for name, value in stats_metrics.items():
-                    stats_tfevents.add_scalar(f'Metrics/{name}', value, global_step=global_step, walltime=walltime)
-                stats_tfevents.flush()
+            # if stats_tfevents is not None:
+            #     global_step = int(cur_nimg / 1e3)
+            #     walltime = timestamp - start_time
+            #     for name, value in stats_dict.items():
+            #         stats_tfevents.add_scalar(name, value.mean, global_step=global_step, walltime=walltime)
+            #     for name, value in stats_metrics.items():
+            #         stats_tfevents.add_scalar(f'Metrics/{name}', value, global_step=global_step, walltime=walltime)
+            #     stats_tfevents.flush()
             if progress_fn is not None:
                 progress_fn(cur_nimg // 1000, total_kimg)
 
