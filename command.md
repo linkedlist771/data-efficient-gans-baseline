@@ -7,5 +7,5 @@ python DiffAugment-stylegan2-pytorch/data_process/process_data.py --data_dir dat
 ## Train
 
 ```bash
-export CUDA_VISIBLE_DEVICES=1 &&   nohup python DiffAugment-stylegan2-pytorch/train.py --outdir checkpoints --data data/deposition_data_processed/  > $(date +%m%d)"style_gan_train".log 2>&1 &
+export CUDA_VISIBLE_DEVICES=1 &&   nohup python DiffAugment-stylegan2-pytorch/train.py --outdir checkpoints --cfg stylegan2 --data data/deposition_data_processed/  > $(date +%m%d)"style_gan_train".log 2>&1 &
 ```
