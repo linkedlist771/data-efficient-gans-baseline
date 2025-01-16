@@ -1,4 +1,3 @@
-
 # prepare_data.py
 from tqdm import tqdm
 from tqdm.asyncio import tqdm_asyncio
@@ -13,6 +12,7 @@ import asyncio
 from concurrent.futures import ProcessPoolExecutor
 import os
 
+
 def timer_decorator(func):
     def wrapper(*args, **kwargs):
         start_time = time.time()
@@ -24,7 +24,7 @@ def timer_decorator(func):
     return wrapper
 
 
-IMAGE_EXTENSION = ['.jpg', '.jpeg', '.png']
+IMAGE_EXTENSION = [".jpg", ".jpeg", ".png"]
 
 """
 处理数据：
@@ -36,9 +36,9 @@ IMAGE_EXTENSION = ['.jpg', '.jpeg', '.png']
 def copy_sub_dir(source_dir: Path, target_dir: Path):
     sub_dir_name = source_dir.name
     for exten in IMAGE_EXTENSION:
-        for idx, img_path in enumerate(source_dir.glob(f'*{exten}')):
+        for idx, img_path in enumerate(source_dir.glob(f"*{exten}")):
             img_name = img_path.name
-            target_path = target_dir / f'{sub_dir_name}_{img_name}'
+            target_path = target_dir / f"{sub_dir_name}_{img_name}"
             shutil.copy(img_path, target_path)
 
 
@@ -62,21 +62,19 @@ async def copy_images(source_dir: Path, target_dir: Path):
             tasks.append(task)
         await tqdm_asyncio.gather(*tasks)
 
+
 def make_json_data(dir_path: Path):
-    json_path = dir_path / 'dataset.json'
+    json_path = dir_path / "dataset.json"
     files = []
     for file in dir_path.iterdir():
         if file.is_file():
             file_name = file.name
             files.append(file_name)
-    labels = {
-        k: 0 for k in files
-    }
-    to_save_dict = {
-        'labels': labels
-    }
-    with open(json_path, 'w') as f:
+    labels = {k: 0 for k in files}
+    to_save_dict = {"labels": labels}
+    with open(json_path, "w") as f:
         json.dump(to_save_dict, f, indent=4)
+
 
 @timer_decorator
 def prepared_data(source_dir: Path, target_dir: Path):
@@ -99,5 +97,5 @@ def main():
     prepared_data(Path(data_dir), Path(output_dir))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -3,12 +3,11 @@
 import os
 
 import click
-import dnnlib
 import numpy as np
 from PIL import Image
 import torch
 
-import legacy
+from models.models import model
 
 # ----------------------------------------------------------------------------
 
@@ -70,8 +69,18 @@ def generate_gif(
     """
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device("cuda")
-    with dnnlib.util.open_url(network_pkl) as f:
-        G = legacy.load_network_pkl(f)["G_ema"].to(device)  # type: ignore
+    # LOAD with pytorch
+    model_dict = torch.load(network_pkl)
+    G = model.Generator(
+        size=256, style_dim=512, n_mlp=8  # opt.style_gan_size,  # opt.latent_dimension,
+    )  # opt.n_mlp)
+    # modelG = model.Generator(size=opt.style_gan_size,
+    #                         style_dim=opt.latent_dimension,
+    #                         n_mlp=opt.n_mlp)
+    # modelG.load_state_dict(ckpt['g_ema'], strict=False)
+    G.load_state_dict(model_dict, strict=False)
+    G.eval()
+    G = G.to(device)
 
     outdir = os.path.dirname(output)
     if outdir:
