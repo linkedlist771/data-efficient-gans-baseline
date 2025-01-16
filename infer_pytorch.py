@@ -3,14 +3,13 @@
 import os
 
 import click
-import dnnlib
 import numpy as np
 from PIL import Image
 import torch
 
-import legacy
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 
 @click.command()
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
@@ -22,20 +21,21 @@ import legacy
 @click.option('--transition-frames', help='Number of transition frames per phase', default=20, type=int)
 @click.option('--static-frames', help='Number of static frames per phase', default=5, type=int)
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
-@click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
+@click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const',
+              show_default=True)
 @click.option('--output', type=str, required=True)
 def generate_gif(
-    network_pkl: str,
-    seed: int,
-    num_rows: int,
-    num_cols: int,
-    resolution: int,
-    num_phases: int,
-    transition_frames: int,
-    static_frames: int,
-    truncation_psi: float,
-    noise_mode: str,
-    output: str
+        network_pkl: str,
+        seed: int,
+        num_rows: int,
+        num_cols: int,
+        resolution: int,
+        num_phases: int,
+        transition_frames: int,
+        static_frames: int,
+        truncation_psi: float,
+        noise_mode: str,
+        output: str
 ):
     """Generate gif using pretrained network pickle.
 
@@ -47,8 +47,10 @@ def generate_gif(
     """
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
-    with dnnlib.util.open_url(network_pkl) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+    # LOAD with pytorch
+    model_dict = torch.load(network_pkl)
+    print(model_dict.keys())
+    G = torch.load(network_pkl).to(device)
 
     outdir = os.path.dirname(output)
     if outdir:
@@ -71,7 +73,7 @@ def generate_gif(
         images = G.synthesis(dlatents, noise_mode=noise_mode)
         images = (images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
         return to_image_grid(images)
-    
+
     for i in range(num_phases):
         dlatents0 = G.mapping(torch.from_numpy(latents[i - 1]).to(device), None)
         dlatents1 = G.mapping(torch.from_numpy(latents[i]).to(device), None)
@@ -79,15 +81,15 @@ def generate_gif(
             dlatents = (dlatents0 * (transition_frames - j) + dlatents1 * j) / transition_frames
             output_seq.append(generate(dlatents))
         output_seq.extend([generate(dlatents1)] * static_frames)
-    
+
     if not output.endswith('.gif'):
         output += '.gif'
     output_seq[0].save(output, save_all=True, append_images=output_seq[1:], optimize=False, duration=50, loop=0)
 
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    generate_gif() # pylint: disable=no-value-for-parameter
+    generate_gif()  # pylint: disable=no-value-for-parameter
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
