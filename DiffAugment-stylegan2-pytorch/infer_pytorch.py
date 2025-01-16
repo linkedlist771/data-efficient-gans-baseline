@@ -81,7 +81,7 @@ def generate_gif(
     G.load_state_dict(model_dict, strict=False)
     G.eval()
     G = G.to(device)
-
+    print(G)
     outdir = os.path.dirname(output)
     if outdir:
         os.makedirs(outdir, exist_ok=True)
@@ -90,7 +90,7 @@ def generate_gif(
 
     output_seq = []
     batch_size = num_rows * num_cols
-    latent_size = G.z_dim
+    latent_size = 512
     latents = [np.random.randn(batch_size, latent_size) for _ in range(num_phases)]
 
     def to_image_grid(outputs):
